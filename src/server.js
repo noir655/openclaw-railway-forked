@@ -1327,6 +1327,27 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         const orRef = `openrouter/${orModel}`;
         console.log(`[openrouter] Configuring OpenRouter with model: ${orModel}`);
 
+        // OpenClaw only accepts models present in its catalog; newer/uncatalogued OpenRouter
+        // slugs (e.g. deepseek/deepseek-v4-pro) otherwise fail at runtime with
+        // "Unknown model: <slug>". Register the chosen model under the built-in openrouter
+        // provider. models.mode=merge preserves the provider's built-in baseUrl/auth and any
+        // already-catalogued models (openclaw/openclaw#5241).
+        await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "models.mode", "merge"]));
+        let orModels = [];
+        try {
+          const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+          const existing = cfg?.models?.providers?.openrouter?.models;
+          if (Array.isArray(existing)) orModels = existing;
+        } catch (_e) { /* no existing custom models */ }
+        if (!orModels.some((m) => m && m.id === orModel)) {
+          orModels.push({ id: orModel, name: orModel });
+        }
+        const registerResult = await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "--json", "models.providers.openrouter.models", JSON.stringify(orModels)]),
+        );
+        console.log(`[openrouter] Registered model in catalog: exit=${registerResult.code}`, registerResult.output || "(no output)");
+
         const setModelResult = await runCmd(
           OPENCLAW_NODE,
           clawArgs(["config", "set", "agents.defaults.model.primary", orRef]),
