@@ -980,6 +980,40 @@ function runCmd(cmd, args, opts = {}, extraEnv = {}) {
   });
 }
 
+// Reconcile per-agent models with the chosen default model.
+//
+// OpenClaw model precedence is: agents.list[].model (per-agent) OVERRIDES
+// agents.defaults.model.primary. `openclaw onboard` scaffolds a default agent in
+// agents.list[] whose own model is provider default (e.g. "openrouter/auto"), which
+// shadows the model the wrapper writes to agents.defaults.model.primary — so the
+// Control UI ends up running the wrong model. We set every agent's model to the same
+// ref so the user's choice wins regardless of which precedence path OpenClaw takes.
+// No-op when there is no agents.list (defaults already apply).
+async function syncAgentModels(modelRef) {
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+  } catch (err) {
+    console.warn(`[model] syncAgentModels: could not read config: ${err.message}`);
+    return { ok: false, changed: 0 };
+  }
+
+  const list = config?.agents?.list;
+  if (!Array.isArray(list) || list.length === 0) {
+    console.log(`[model] syncAgentModels: no agents.list to reconcile (defaults apply)`);
+    return { ok: true, changed: 0 };
+  }
+
+  const updated = list.map((agent) => ({ ...agent, model: modelRef }));
+
+  const result = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["config", "set", "--json", "agents.list", JSON.stringify(updated)]),
+  );
+  console.log(`[model] syncAgentModels: set ${updated.length} agent(s) to ${modelRef} (exit=${result.code})`, result.output || "(no output)");
+  return { ok: result.code === 0, changed: updated.length };
+}
+
 app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   // Set flag to prevent middleware from starting gateway during onboarding
   onboardingInProgress = true;
@@ -1287,14 +1321,20 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
       // Configure OpenRouter model if selected
       if (payload.authChoice === "openrouter-api-key" && payload.openrouterModel) {
-        const orModel = payload.openrouterModel;
+        // Strip any leading "openrouter/" the user may have pasted, to avoid the
+        // "openrouter/openrouter/..." double-prefix that OpenClaw rejects (issue #25665).
+        const orModel = String(payload.openrouterModel).trim().replace(/^openrouter\//, "");
+        const orRef = `openrouter/${orModel}`;
         console.log(`[openrouter] Configuring OpenRouter with model: ${orModel}`);
 
         const setModelResult = await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "agents.defaults.model.primary", `openrouter/${orModel}`]),
+          clawArgs(["config", "set", "agents.defaults.model.primary", orRef]),
         );
         console.log(`[openrouter] Set model result: exit=${setModelResult.code}`, setModelResult.output || "(no output)");
+
+        // Also set the model on any scaffolded agent so it doesn't shadow the default.
+        await syncAgentModels(orRef);
 
         extra += `\n[openrouter] configured OpenRouter (model: ${orModel})\n`;
       }
@@ -1333,11 +1373,15 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         console.log(`[atlas] Set provider result: exit=${setProviderResult.code}`, setProviderResult.output || "(no output)");
 
         // Set the active model to use Atlas Cloud (use / not :)
+        const atlasRef = `atlas/${atlasModel}`;
         const setModelResult = await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "agents.defaults.model.primary", `atlas/${atlasModel}`]),
+          clawArgs(["config", "set", "agents.defaults.model.primary", atlasRef]),
         );
         console.log(`[atlas] Set model result: exit=${setModelResult.code}`, setModelResult.output || "(no output)");
+
+        // Also set the model on any scaffolded agent so it doesn't shadow the default.
+        await syncAgentModels(atlasRef);
 
         extra += `\n[atlas] configured Atlas Cloud provider (model: ${atlasModel})\n`;
       } else {
@@ -1372,17 +1416,46 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         );
         console.log(`[modelscope] Set provider result: exit=${setProviderResult.code}`, setProviderResult.output || "(no output)");
 
+        const msRef = `modelscope/${msModel}`;
         const setModelResult = await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "agents.defaults.model.primary", `modelscope/${msModel}`]),
+          clawArgs(["config", "set", "agents.defaults.model.primary", msRef]),
         );
         console.log(`[modelscope] Set model result: exit=${setModelResult.code}`, setModelResult.output || "(no output)");
+
+        // Also set the model on any scaffolded agent so it doesn't shadow the default.
+        await syncAgentModels(msRef);
 
         extra += `\n[modelscope] configured ModelScope.ai provider (model: ${msModel})\n`;
       }
 
       // Apply changes immediately.
       await restartGateway();
+
+      // Surface the model the default agent will actually use, so any fallback
+      // (e.g. to openrouter/auto) is visible in the wizard log instead of only
+      // showing up later in the Control UI.
+      try {
+        const effective = await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "get", "agents.defaults.model.primary"]),
+        );
+        const defaultPrimary = effective.code === 0 ? effective.output.trim() : "(unknown)";
+        let agentModel = null;
+        try {
+          const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+          const list = cfg?.agents?.list;
+          if (Array.isArray(list) && list.length > 0) {
+            const def = list.find((a) => a && a.default === true) || list[0];
+            agentModel = def?.model ?? null;
+          }
+        } catch (_e) { /* ignore */ }
+        const effModel = agentModel || defaultPrimary;
+        console.log(`[model] effective model: ${effModel} (defaults.primary=${defaultPrimary}, defaultAgent.model=${agentModel ?? "inherit"})`);
+        extra += `\n[model] effective model: ${effModel} (default agent)\n`;
+      } catch (err) {
+        console.warn(`[model] could not read effective model: ${err.message}`);
+      }
     }
 
     return res.status(ok ? 200 : 500).json({
