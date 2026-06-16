@@ -19,6 +19,11 @@ RUN python3 -m venv /opt/venv && \
 RUN mkdir -p /usr/share/openclaw/public && \
     chmod 755 /usr/share/openclaw/public
 
+# Après la création du répertoire public, ajoutez:
+RUN mkdir -p /usr/share/openclaw/public && \
+    chmod 755 /usr/share/openclaw/public && \
+    ln -s /usr/share/openclaw/public /data/workspace/public
+
 # Install mpg123 for audio playback (optional but recommended)
 RUN apt-get install -y mpg123
 
