@@ -3,11 +3,22 @@
 # Railway only pushes src/ + skills/ as new layers — keeps deploys fast.
 FROM ghcr.io/derekcheungsa/openclaw-railway-template-easy-config-base:latest
 
+# Install audio and TTS dependencies via apt
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    sox \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python TTS packages in a virtual environment
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip && \
+    /opt/venv/bin/pip install gtts edge-tts
+
 WORKDIR /app
 COPY src ./src
 RUN mkdir -p /data/.openclaw
 COPY skills /data/.openclaw/skills
-
 ENV PORT=8080
 EXPOSE 8080
 CMD ["node", "src/server.js"]
