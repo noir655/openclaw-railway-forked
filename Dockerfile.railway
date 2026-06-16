@@ -15,6 +15,13 @@ RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install gtts edge-tts
 
+# Create public directory for audio files
+RUN mkdir -p /usr/share/openclaw/public && \
+    chmod 755 /usr/share/openclaw/public
+
+# Install mpg123 for audio playback (optional but recommended)
+RUN apt-get install -y mpg123
+
 WORKDIR /app
 COPY src ./src
 RUN mkdir -p /data/.openclaw
