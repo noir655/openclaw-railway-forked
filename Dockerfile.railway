@@ -1,36 +1,30 @@
 # syntax=docker/dockerfile:1
-# All heavy deps (apt, Python, openclaw, npm) are pre-built in the base image.
-# Railway only pushes src/ + skills/ as new layers — keeps deploys fast.
 FROM ghcr.io/derekcheungsa/openclaw-railway-template-easy-config-base:latest
 
 # Install audio and TTS dependencies via apt
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    sox \
-    libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+ ffmpeg \
+ sox \
+ libasound2 \
+ mpg123 \
+ && rm -rf /var/lib/apt/lists/*
 
 # Install Python TTS packages in a virtual environment
 RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip && \
-    /opt/venv/bin/pip install gtts edge-tts
+ /opt/venv/bin/pip install --upgrade pip && \
+ /opt/venv/bin/pip install gtts edge-tts
 
-# Create public directory for audio files
-RUN mkdir -p /usr/share/openclaw/public && \
-    chmod 755 /usr/share/openclaw/public
-
-# Après la création du répertoire public, ajoutez:
-RUN mkdir -p /usr/share/openclaw/public && \
-    chmod 755 /usr/share/openclaw/public && \
-    ln -s /usr/share/openclaw/public /data/workspace/public
-
-# Install mpg123 for audio playback (optional but recommended)
-RUN apt-get install -y mpg123
+# Create public directory and symlink for audio files
+RUN mkdir -p /usr/share/openclaw/public /data/workspace && \
+ chmod 755 /usr/share/openclaw/public && \
+ ln -s /usr/share/openclaw/public /data/workspace/public
 
 WORKDIR /app
 COPY src ./src
 RUN mkdir -p /data/.openclaw
 COPY skills /data/.openclaw/skills
+
 ENV PORT=8080
 EXPOSE 8080
+
 CMD ["node", "src/server.js"]
